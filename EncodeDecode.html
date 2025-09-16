@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text to Image Encoder/Decoder</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .app-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background-color: #f7fafc;
+            padding: 1rem;
+        }
+        .card {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            width: 100%;
+            max-width: 800px;
+        }
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            color: white;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        .btn-primary {
+            background-color: #4f46e5;
+        }
+        .btn-primary:hover {
+            background-color: #4338ca;
+        }
+        .btn-secondary {
+            background-color: #64748b;
+        }
+        .btn-secondary:hover {
+            background-color: #475569;
+        }
+        textarea, input[type="file"] {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #d1d5db;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        textarea:focus, input[type="file"]:focus {
+            outline: none;
+            border-color: #4f46e5;
+            box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.4);
+        }
+        canvas {
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            background-color: #f9fafb;
+            max-width: 100%;
+            height: auto;
+        }
+        .divider {
+            border-top: 1px solid #e5e7eb;
+            margin: 2rem 0;
+        }
+        .label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #374151;
+        }
+        .result-box {
+            background-color: #f3f4f6;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            min-height: 100px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            border: 1px solid #e5e7eb;
+        }
+        #loader {
+            display: none;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #4f46e5;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 1rem auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+
+<div class="app-container">
+    <div class="card">
+        <h1 class="text-3xl font-bold text-center text-gray-800 mb-2">Text-to-Image Conversion</h1>
+        <p class="text-center text-gray-500 mb-8">Encode text into a color grid image and decode it back.</p>
+
+        <!-- Encoder Section -->
+        <div>
+            <h2 class="text-2xl font-semibold text-gray-700 mb-4">Encoder</h2>
+            <label for="text-input" class="label">Enter Text to Encode:</label>
+            <textarea id="text-input" rows="4" placeholder="Type your secret message here..."></textarea>
+            <div class="flex items-center space-x-4">
+                <button id="encode-btn" class="btn btn-primary">Encode & Download Image</button>
+                <div id="loader"></div>
+            </div>
+            <div class="mt-6">
+                 <h3 class="text-lg font-medium text-gray-700 mb-2">Generated Image Preview:</h3>
+                 <canvas id="canvas"></canvas>
+            </div>
+        </div>
+        
+        <div class="divider"></div>
+
+        <!-- Decoder Section -->
+        <div>
+            <h2 class="text-2xl font-semibold text-gray-700 mb-4">Decoder</h2>
+            <label for="image-upload" class="label">Upload Image to Decode:</label>
+            <input type="file" id="image-upload" accept="image/png">
+            <button id="decode-btn" class="btn btn-secondary">Decode Image</button>
+
+            <div class="mt-6">
+                <h3 class="text-lg font-medium text-gray-700 mb-2">Decoded Text:</h3>
+                <div id="decoded-text" class="result-box"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const textInput = document.getElementById('text-input');
+        const encodeBtn = document.getElementById('encode-btn');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        const imageUpload = document.getElementById('image-upload');
+        const decodeBtn = document.getElementById('decode-btn');
+        const decodedText = document.getElementById('decoded-text');
+        
+        const loader = document.getElementById('loader');
+
+        const MAX_DIMENSION = 500;
+
+        // --- ENCODING FUNCTIONS ---
+
+        /**
+         * Step 1 (Encode): Convert an ASCII string to a binary string.
+         * Each character becomes an 8-bit binary representation.
+         */
+        const textToBinary = (text) => {
+            return text.split('').map(char => {
+                return char.charCodeAt(0).toString(2).padStart(8, '0');
+            }).join('');
+        };
+
+        /**
+         * Step 2 (Encode): Convert the binary string into an array of numbers using a robust RLE method.
+         * This function combines RLE and number conversion into one step to ensure it's reversible.
+         * For each run (e.g., three '0's), it calculates a unique number: (count * 2) + bit.
+         * Example: A run of three '0's -> (3 * 2) + 0 = 6.
+         * Example: A run of two '1's -> (2 * 2) + 1 = 5.
+         * This keeps numbers under 255 and is perfectly reversible.
+         */
+        const binaryToNumArray = (binaryStr) => {
+            if (!binaryStr) return [];
+            const numArray = [];
+            // Max run count is 127, because (127 * 2) + 1 = 255, fitting in a byte.
+            const MAX_RUN = 127; 
+            let i = 0;
+            while (i < binaryStr.length) {
+                const bitChar = binaryStr[i];
+                const bit = parseInt(bitChar);
+                let count = 1;
+                while (i + 1 < binaryStr.length && binaryStr[i + 1] === bitChar && count < MAX_RUN) {
+                    count++;
+                    i++;
+                }
+                // The core of the new, robust logic.
+                numArray.push((count * 2) + bit);
+                i++;
+            }
+            return numArray;
+        };
+        
+        /**
+         * Step 3 (Encode): Draw the number array as a color grid on the canvas.
+         * The array is reversed first. The grid size is calculated to be a square.
+         * Values are cycled through R, G, and B channels.
+         */
+        const drawColorGrid = (numArray) => {
+            const reversedArray = [...numArray].reverse();
+            const dataLength = reversedArray.length;
+            if (dataLength === 0) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                return;
+            }
+
+            const gridSize = Math.ceil(Math.sqrt(dataLength + 1));
+            const pixelSize = Math.floor(MAX_DIMENSION / gridSize);
+            
+            const canvasSize = gridSize * pixelSize;
+            canvas.width = canvasSize;
+            canvas.height = canvasSize;
+            
+            ctx.clearRect(0, 0, canvasSize, canvasSize);
+            
+            // Store the length of the data in the first pixel (0,0)
+            const len_r = Math.floor(dataLength / 65536) % 256;
+            const len_g = Math.floor(dataLength / 256) % 256;
+            const len_b = dataLength % 256;
+            ctx.fillStyle = `rgb(${len_r}, ${len_g}, ${len_b})`;
+            ctx.fillRect(0, 0, pixelSize, pixelSize);
+
+            for (let i = 0; i < dataLength; i++) {
+                const value = reversedArray[i];
+                let r = 0, g = 0, b = 0;
+                
+                const channel = i % 3;
+                if (channel === 0) r = value;
+                else if (channel === 1) g = value;
+                else b = value;
+
+                const gridIndex = i + 1;
+                const x = (gridIndex % gridSize) * pixelSize;
+                const y = Math.floor(gridIndex / gridSize) * pixelSize;
+
+                ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+                ctx.fillRect(x, y, pixelSize, pixelSize);
+            }
+        };
+
+        // --- DECODING FUNCTIONS ---
+
+        /**
+         * Step 1 (Decode): Read pixel data from the image and convert it to a number array.
+         * Extracts encoded values from the R, G, B channels of the pixels.
+         */
+        const pixelsToNumArray = (imageData) => {
+            const data = imageData.data;
+            const width = imageData.width;
+
+            const len_r = data[0];
+            const len_g = data[1];
+            const len_b = data[2];
+            const dataLength = len_r * 65536 + len_g * 256 + len_b;
+
+            if (dataLength === 0 || dataLength > (data.length / 4)) {
+                console.error("Invalid data length detected in image.");
+                return [];
+            }
+            
+            const totalPixels = dataLength + 1;
+            const gridSize = Math.ceil(Math.sqrt(totalPixels));
+            const pixelSize = Math.floor(width / gridSize);
+
+            const numArray = [];
+
+            for (let i = 0; i < dataLength; i++) {
+                const pixelIndex = i + 1;
+                const blockX = (pixelIndex % gridSize);
+                const blockY = Math.floor(pixelIndex / gridSize);
+                
+                if (blockY >= gridSize) continue;
+                
+                const pixelX = blockX * pixelSize;
+                const pixelY = blockY * pixelSize;
+
+                const dataIndex = (pixelY * width + pixelX) * 4;
+
+                const channel = i % 3;
+                let val;
+                if (channel === 0) val = data[dataIndex];
+                else if (channel === 1) val = data[dataIndex + 1];
+                else val = data[dataIndex + 2];
+                
+                numArray.push(val);
+            }
+            return numArray;
+        };
+
+        /**
+         * Step 2 (Decode): Convert the number array back to a binary string.
+         * This reverses the (count * 2) + bit formula.
+         * Example: 6 -> count = floor(6/2)=3, bit = 6%2=0. Result: three '0's.
+         * Example: 5 -> count = floor(5/2)=2, bit = 5%2=1. Result: two '1's.
+         */
+        const numArrayToBinary = (numArray) => {
+             let binaryStr = '';
+             for(const num of numArray) {
+                const count = Math.floor(num / 2);
+                const bit = (num % 2).toString();
+                if (count > 0) {
+                    binaryStr += bit.repeat(count);
+                }
+             }
+             return binaryStr;
+        };
+
+        /**
+         * Step 3 (Decode): Convert the binary string back to an ASCII text string.
+         * Chunks the binary string into 8-bit segments and converts to characters.
+         */
+        const binaryToText = (binaryStr) => {
+            let text = '';
+            for (let i = 0; i < binaryStr.length; i += 8) {
+                const byte = binaryStr.substr(i, 8);
+                if (byte.length === 8) {
+                    text += String.fromCharCode(parseInt(byte, 2));
+                }
+            }
+            return text;
+        };
+
+        // --- EVENT LISTENERS ---
+        
+        encodeBtn.addEventListener('click', () => {
+            const text = textInput.value;
+            if (!text) {
+                alert("Please enter some text to encode.");
+                return;
+            }
+            loader.style.display = 'block';
+            
+            setTimeout(() => {
+                // Full Encoding Pipeline
+                const binary = textToBinary(text);
+                const numArray = binaryToNumArray(binary);
+                drawColorGrid(numArray);
+    
+                const link = document.createElement('a');
+                link.download = 'encoded-image.png';
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+
+                loader.style.display = 'none';
+            }, 50);
+        });
+
+        decodeBtn.addEventListener('click', () => {
+            const file = imageUpload.files[0];
+            if (!file) {
+                alert("Please upload an image file to decode.");
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    const tempCanvas = document.createElement('canvas');
+                    const tempCtx = tempCanvas.getContext('2d');
+                    tempCanvas.width = img.width;
+                    tempCanvas.height = img.height;
+                    tempCtx.drawImage(img, 0, 0);
+                    const imageData = tempCtx.getImageData(0, 0, img.width, img.height);
+                    
+                    // Full Decoding Pipeline
+                    const numArrayFromPixels = pixelsToNumArray(imageData);
+                    const reversedArray = numArrayFromPixels.reverse();
+                    const binaryString = numArrayToBinary(reversedArray);
+                    const text = binaryToText(binaryString);
+
+                    decodedText.textContent = text || "Decoding failed or image is empty.";
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+    });
+</script>
+
+</body>
+</html>
+
